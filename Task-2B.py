@@ -13,11 +13,12 @@
       import logging
       from luminosity_drone.msg import Biolocation
 
+      # Configure logging
       logging.basicConfig(filename='ldlog.txt', level=logging.INFO, 
                           format='%(asctime)s:%(levelname)s:%(message)s')
 
       class Swift:
-          def _init_(self):
+          def init(self):
               rospy.init_node('drone_control')
               self.drone_position = [0.0, 0.0, 0.0]
               self.landing = False
@@ -30,15 +31,17 @@
               self.final_movement_initiated = False
 
 
+              # Define arena boundaries and generate waypoints
               self.arena_bounds = [(-8, -8), (8, -8), (8, 8), (-8, 8)]
               self.waypoints = self.generate_arena_waypoints()
               self.current_waypoint_idx = 0
 
+              # PID control and error terms
               self.alt_error = self.roll_error = self.pitch_error = 0.0
               self.prev_alt_error = self.prev_roll_error = self.prev_pitch_error = 0.0
               self.sum_alt_error = self.sum_roll_error = self.sum_pitch_error = 0.0
 
-             
+              # PID gains - may need to be tuned according to the drone's response
               self.thro_mul = [0, 0, 0]
               self.roll_mul = [0, 0, 0]
               self.pitch_mul = [0, 0, 0]
@@ -48,14 +51,14 @@
               self.arm()
 
           def generate_arena_waypoints(self):
-              grid_spacing = 4  
+              grid_spacing = 4  # adjust spacing as needed
               x_coords = np.arange(self.arena_bounds[0][0], self.arena_bounds[1][0] + grid_spacing, grid_spacing)
               y_coords = np.arange(self.arena_bounds[0][1], self.arena_bounds[2][1] + grid_spacing, grid_spacing)
 
               waypoints = []
               for x in x_coords:
                   for y in y_coords:
-                      waypoints.append([x, y, 23]) 
+                      waypoints.append([x, y, 23])  # Adjust altitude as needed
               return waypoints
 
           def init_command(self):
@@ -87,13 +90,13 @@
               rospy.sleep(1)
 
           def image_callback(self, msg):
-         
+          #   logging.info("Image received")  # Added log to confirm images are being received
             print("Images are being recieved")
             try:
                 cv2_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
                 print("cv2_img conversion successful")
             except CvBridgeError as e:
-                logging.error("CvBridge Error: {0}".format(e))  
+                logging.error("CvBridge Error: {0}".format(e))  # Log any CvBridge errors
             else:
                 if self.led_detection_active:
                     print("Detect leds running")
@@ -101,25 +104,35 @@
 
 
           def detect_leds(self, frame):
+          #   logging.info("Processing frame for LED detection") 
             print("Processing frame for LED detection")
+            # Convert to grayscale
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Apply Gaussian blur
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            # Threshold the image to get the bright regions
             _, thresh = cv2.threshold(blur, 220, 255, cv2.THRESH_BINARY)
+            # Find contours
             contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            # Filter out small contours that are not LEDs
             led_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 10]
 
+            # If LEDs are found
             if led_contours:
+                  # Calculate the centroid of the LEDs
                   M = cv2.moments(np.concatenate(led_contours))
                   if M["m00"] != 0:
                       centroid_x = int(M["m10"] / M["m00"])
                       centroid_y = int(M["m01"] / M["m00"])
 
+                      # Get the center of the frame
                       center_x, center_y = frame.shape[1] // 2, frame.shape[0] // 2
 
+                      # Calculate the offset from the center
                       offset_x = centroid_x - center_x
                       offset_y = centroid_y - center_y
 
-                      
+                      # Call method to adjust the drone's position based on the offset
                       self.align_drone(offset_x, offset_y)
                       self.publish_biolocation(centroid_x, centroid_y, self.drone_position)
                   else:
@@ -130,14 +143,16 @@
               print("LED found")
 
           def publish_biolocation(self, led_x, led_y, whycon_pos):
+              # Create an instance of the Biolocation message
               bio_loc_msg = Biolocation()
-              bio_loc_msg.organism_type = "alien_b"  
+              bio_loc_msg.organism_type = "alien_b"  # You can change this string to whatever is appropriate
               bio_loc_msg.whycon_x = whycon_pos[0]
               bio_loc_msg.whycon_y = whycon_pos[1]
               bio_loc_msg.whycon_z = whycon_pos[2]
 
               print(f"Published Biolocation: organism_type={bio_loc_msg.organism_type}, whycon_x={bio_loc_msg.whycon_x}, whycon_y={bio_loc_msg.whycon_y}, whycon_z={bio_loc_msg.whycon_z}")
 
+              # Publish the message
               self.bio_location_pub.publish(bio_loc_msg)
               logging.info(f"Published Biolocation: {bio_loc_msg}")
 
@@ -146,39 +161,55 @@
 
           def initiate_final_movement(self):
               self.final_movement_initiated = True
-              self.waypoints.append([11, 11, 37])  
-              self.current_waypoint_idx = len(self.waypoints) - 1 
+              self.waypoints.append([11, 11, 37])  # Append the final waypoint
+              self.current_waypoint_idx = len(self.waypoints) - 1  # Set to final waypoint index
+
           def align_drone(self, offset_x, offset_y):
-            
+            # The sensitivity factor determines how much the drone will adjust based on the offset
             sensitivity = 0.1
+            # Calculate roll and pitch adjustments
             roll_adjust = -offset_x * sensitivity
             pitch_adjust = -offset_y * sensitivity
 
-            
+            # Assume that the roll and pitch commands need to be between 1000 and 2000
+            # with 1500 being the center (no roll or pitch)
             new_roll = max(min(self.cmd.rcRoll + roll_adjust, 2000), 1000)
             new_pitch = max(min(self.cmd.rcPitch + pitch_adjust, 2000), 1000)
 
+            # Update the drone's command message
             self.cmd.rcRoll = int(new_roll)
             self.cmd.rcPitch = int(new_pitch)
 
+            # Publish the new command
             self.command_pub.publish(self.cmd)
 
+            # Log the adjustment
             print(f"Aligning drone: roll={new_roll}, pitch={new_pitch}")
 
           def whycon_callback(self, msg):
               self.drone_position = [msg.poses[0].position.x, msg.poses[0].position.y, msg.poses[0].position.z]
 
-          
+          # def pid(self):
+          #     self.setpoint = self.waypoints[self.current_waypoint_idx]
+          #     self.compute_error()
+          #     self.update_command()
+          #     self.command_pub.publish(self.cmd)
 
           def pid(self):
               self.setpoint = self.waypoints[self.current_waypoint_idx]
               if self.setpoint in [[-5, 2, 25], [-5, -3, 25], [-5, -3, 21]]:
-                 
+                  # Different PID gains
+                  # self.Kp = [0.09, 0.09, 0.05]
+                  # self.Ki = [0.0001, 0.0001, 0.0001]
+                  # self.Kd = [0.3, 0.3, 0.4]
                   self.roll_mul = [0.09, 0.0001, 0.3]
                   self.pitch_mul = [0.09, 0.0001, 0.3]
                   self.thro_mul = [0.05, 0.0001, 0.4]            
               else:
-                  
+                  # Standard PID gains
+                  # self.Kp = [0.06, 0.06, 0.03]
+                  # self.Ki = [0.0001, 0.0001, 0.00005]
+                  # self.Kd = [0.3, 0.3, 0.3]
                   self.roll_mul = [0.06, 0.0001, 0.3]
                   self.pitch_mul = [0.06, 0.0001, 0.3]
                   self.thro_mul = [0.03, 0.00005, 0.3]
@@ -188,39 +219,45 @@
               self.led_detection_active = True
 
 
+              # Check if the drone has reached the current waypoint
                         if all(abs(self.drone_position[i] - self.setpoint[i]) < 0.2 for i in range(3)):
                           if self.current_waypoint_idx < len(self.waypoints) - 1:
                               self.current_waypoint_idx += 1
                           else:
-                              
+                              # Check if drone is close enough to the final waypoint to initiate landing
                               if not self.landing:
                                   print("Reached final waypoint. Preparing to land.")
                                   self.landing = True
                                   self.land()
 
           def land(self):
-          
+          # Ensures this method is only executed once
+
+              # Ensures this method is only executed once
               if self.landing:
                   return
               self.landing = True
               print("Landing sequence initiated.")
 
-             
-              while not rospy.is_shutdown() and self.drone_position[2] > 0.5: 
+              # Continue to decrease altitude until the drone is close to the ground
+              while not rospy.is_shutdown() and self.drone_position[2] > 0.5:  # Assumes 0.5m above the ground is close enough
                   self.decrease_altitude()
-                  rospy.sleep(0.1)  
+                  rospy.sleep(0.1)  # Sleep to give time for altitude to decrease
+
+              # When the drone is close enough to the ground, disarm it to land
               print("Drone is landing.")
               self.disarm()
               print("Drone has landed and disarmed.")
 
 
           def decrease_altitude(self):
-          
-          self.cmd.rcThrottle -= 10  
-          if self.cmd.rcThrottle < 1000:  
+          # Assuming that the command to decrease altitude is to decrease throttle
+          # You will need to adjust this logic to fit how your drone's control system works
+          self.cmd.rcThrottle -= 10  # Decrease the throttle to descend
+          if self.cmd.rcThrottle < 1000:  # Make sure throttle does not go below the minimum value
               self.cmd.rcThrottle = 1000
-          self.command_pub.publish(self.cmd)  
-          self.alt_error_pub.publish(self.alt_error)  
+          self.command_pub.publish(self.cmd)  # Publish the new command
+          self.alt_error_pub.publish(self.alt_error)  # Publish the altitude error if needed
 
 
 
@@ -234,7 +271,8 @@
               roll = [100, 0, 170]
               pitch = [135, 0, 650]
 
-             
+              # th_mul = [0.03, 0.0001, 0.3]
+              # rp_mul = [0.06, 0.0001, 0.3]
 
               self.Kp = [roll[0]*self.roll_mul[0], pitch[0]*self.pitch_mul[0], throttle[0]*self.thro_mul[0]]
               self.Ki = [roll[1]*self.roll_mul[1], pitch[1]*self.pitch_mul[1], throttle[1]*self.thro_mul[1]]
@@ -268,13 +306,13 @@
               self.pitch_error_pub.publish(self.pitch_error)
 
 
-      if _name_ == '_main_':
-          rospy.loginfo("Starting Swift drone node")  
+      if name == 'main':
+          logging.info("Starting Swift drone node")  # Log that the node is starting
           print("Swift drone launched")
 
           swift_drone = Swift()
           r = rospy.Rate(30)
-          swift_drone.waypoints.append([11, 11, 37])  
+          swift_drone.waypoints.append([11, 11, 37])  # Final destination
 
           while not rospy.is_shutdown():
               swift_drone.pid()

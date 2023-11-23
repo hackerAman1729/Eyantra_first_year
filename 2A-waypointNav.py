@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env python3
 
 from swift_msgs.msg import *
@@ -8,38 +6,28 @@ from std_msgs.msg import Float64
 from pid_tune.msg import PidTune
 import rospy
 import time
-import numpy as np
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError
-import cv2
-import logging
-
-# Configure logging
-logging.basicConfig(filename='ldlog.txt', level=logging.INFO, 
-                    format='%(asctime)s:%(levelname)s:%(message)s')
-
-
 
 class Swift:
-    def __init__(self):
+    def _init_(self):
         rospy.init_node('drone_control')
         self.drone_position = [0.0, 0.0, 0.0]
-
-        self.bridge = CvBridge()
-        self.image_sub = rospy.Subscriber('/swift/camera_rgb/image_raw', Image, self.image_callback)
-        self.led_detection_active = False
-
-        # Define arena boundaries and generate waypoints
-        self.arena_bounds = [(-8, -8), (8, -8), (8, 8), (-8, 8)]
-        self.waypoints = self.generate_arena_waypoints()
+        self.waypoints = [
+            [0, 0, 23],
+            [2, 0, 23],
+            [2, 2, 23],
+            [2, 2, 25],
+            [-5, 2, 25],
+            [-5, -3, 25],
+            [-5, -3, 21],
+            [7, -3, 21],
+            [7, 0, 21],
+            [0, 0, 19]
+        ]
         self.current_waypoint_idx = 0
-
-        # PID control and error terms
         self.alt_error = self.roll_error = self.pitch_error = 0.0
         self.prev_alt_error = self.prev_roll_error = self.prev_pitch_error = 0.0
         self.sum_alt_error = self.sum_roll_error = self.sum_pitch_error = 0.0
 
-        # PID gains - may need to be tuned according to the drone's response
         self.thro_mul = [0, 0, 0]
         self.roll_mul = [0, 0, 0]
         self.pitch_mul = [0, 0, 0]
@@ -47,17 +35,6 @@ class Swift:
         self.init_command()
         self.init_ros_nodes()
         self.arm()
-
-    def generate_arena_waypoints(self):
-        grid_spacing = 2  # adjust spacing as needed
-        x_coords = np.arange(self.arena_bounds[0][0], self.arena_bounds[1][0] + grid_spacing, grid_spacing)
-        y_coords = np.arange(self.arena_bounds[0][1], self.arena_bounds[2][1] + grid_spacing, grid_spacing)
-
-        waypoints = []
-        for x in x_coords:
-            for y in y_coords:
-                waypoints.append([x, y, 23])  # Adjust altitude as needed
-        return waypoints
 
     def init_command(self):
         self.cmd = swift_msgs()
@@ -84,35 +61,6 @@ class Swift:
         self.cmd.rcAUX4 = 1100
         self.command_pub.publish(self.cmd)
         rospy.sleep(1)
-
-    def image_callback(self, msg):
-      logging.info("Image received")  # Added log to confirm images are being received
-      try:
-          cv2_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-      except CvBridgeError as e:
-          logging.error("CvBridge Error: {0}".format(e))  # Log any CvBridge errors
-      else:
-          if self.led_detection_active:
-              self.detect_leds(cv2_img)
-
-    def detect_leds(self, frame):
-      logging.info("Processing frame for LED detection") 
-      # Convert to grayscale
-      gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-      # Apply Gaussian blur
-      blur = cv2.GaussianBlur(gray, (5, 5), 0)
-      # Threshold the image to get the bright regions
-      _, thresh = cv2.threshold(blur, 220, 255, cv2.THRESH_BINARY)
-
-      # Find contours
-      contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-      # Filter out small contours that are not LEDs
-      led_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 10]
-
-      # If three LEDs are found
-      if led_contours:  # This checks if the list is not empty
-        logging.info("LEDs found")
 
     def whycon_callback(self, msg):
         self.drone_position = [msg.poses[0].position.x, msg.poses[0].position.y, msg.poses[0].position.z]
@@ -144,8 +92,6 @@ class Swift:
         self.compute_error()
         self.update_command()
         self.command_pub.publish(self.cmd)
-        self.led_detection_active = True
-
 
         # Check if the drone has reached the current waypoint
         if all(abs(self.drone_position[i] - self.setpoint[i]) < 0.2 for i in range(3)):
@@ -197,11 +143,10 @@ class Swift:
         self.pitch_error_pub.publish(self.pitch_error)
 
 
-if __name__ == '__main__':
-    logging.info("Starting Swift drone node")  
-
+if _name_ == '_main_':
     swift_drone = Swift()
     r = rospy.Rate(30)
+    rospy.sleep(8)
 
     while not rospy.is_shutdown():
         swift_drone.pid()
