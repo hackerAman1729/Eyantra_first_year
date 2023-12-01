@@ -39,6 +39,8 @@ num_leds = 0
 centroid_list = []
 area_list = []
 
+
+
 # Contour looping
 for (i, c) in enumerate(cnts):
     area = cv2.contourArea(c)
